@@ -1,0 +1,328 @@
+<script type="text/javascript">
+    var gk_isXlsx = false;
+    var gk_xlsxFileLookup = {};
+    var gk_fileData = {};
+    function filledCell(cell) {
+      return cell !== '' && cell != null;
+    }
+    function loadFileData(filename) {
+    if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+        try {
+            var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+            var firstSheetName = workbook.SheetNames[0];
+            var worksheet = workbook.Sheets[firstSheetName];
+
+            // Convert sheet to JSON to filter blank rows
+            var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+            // Filter out blank rows (rows where all cells are empty, null, or undefined)
+            var filteredData = jsonData.filter(row => row.some(filledCell));
+
+            // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
+            var headerRowIndex = filteredData.findIndex((row, index) =>
+              row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+            );
+            // Fallback
+            if (headerRowIndex === -1 || headerRowIndex > 25) {
+              headerRowIndex = 0;
+            }
+
+            // Convert filtered JSON back to CSV
+            var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
+            csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+            return csv;
+        } catch (e) {
+            console.error(e);
+            return "";
+        }
+    }
+    return gk_fileData[filename] || "";
+    }
+    </script><!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Juego de Cartas: Configuraciones Electrónicas</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+<style>
+    .card {
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+        background: linear-gradient(135deg, #f3f4f6, #e5e7eb);
+    }
+    .card:hover {
+        transform: scale(1.1);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+    }
+    .card.selected {
+        border: 4px solid #facc15;
+        transform: scale(1.05);
+    }
+    @media (max-width: 640px) {
+        .card {
+            width: 70px;
+            height: 100px;
+            font-size: 0.65rem;
+        }
+        .card img {
+            width: 30px;
+            height: 30px;
+        }
+    }
+</style>
+</head>
+<body class="bg-gradient-to-br from-blue-200 via-green-100 to-purple-200 min-h-screen flex items-center justify-center p-4">
+<div id="game-area" class="bg-white rounded-2xl shadow-2xl p-6 max-w-5xl w-full">
+    <h1 class="text-4xl font-extrabold text-center text-gray-900 mb-8">Configuraciones Electrónicas</h1>
+    <div id="room-setup" class="mb-8 text-center">
+        <input id="player-name" type="text" placeholder="Tu nombre" class="border-2 border-gray-300 rounded-lg p-3 mr-3 focus:outline-none focus:border-blue-500">
+        <input id="room-id" type="text" placeholder="ID de sala" class="border-2 border-gray-300 rounded-lg p-3 mr-3 focus:outline-none focus:border-blue-500">
+        <button onclick="joinRoom()" class="bg-blue-600 text-white rounded-lg px-5 py-3 hover:bg-blue-700 transition">Unirse</button>
+        <button onclick="createRoom()" class="bg-green-600 text-white rounded-lg px-5 py-3 hover:bg-green-700 transition">Crear Sala</button>
+    </div>
+    <div id="opponent-hand" class="flex flex-wrap justify-center gap-4 mb-8"></div>
+    <div id="question-area" class="text-center text-xl font-semibold text-gray-800 bg-gray-100 rounded-lg p-4 mb-8"></div>
+    <div id="player-hand" class="flex flex-wrap justify-center gap-4 mb-8"></div>
+    <div id="message" class="text-center text-lg text-gray-700 mb-8"></div>
+    <div class="text-center">
+        <button onclick="playTurn()" class="bg-purple-600 text-white rounded-lg px-8 py-3 hover:bg-purple-700 transition">Jugar Turno</button>
+    </div>
+</div>
+
+<script>
+    // Reemplaza con tus propias credenciales de Firebase desde Firebase Console
+    const firebaseConfig = {
+        apiKey: "TU_API_KEY",
+        authDomain: "TU_PROJECT_ID.firebaseapp.com",
+        databaseURL: "https://TU_PROJECT_ID-default-rtdb.firebaseio.com",
+        projectId: "TU_PROJECT_ID",
+        storageBucket: "TU_PROJECT_ID.appspot.com",
+        messagingSenderId: "TU_SENDER_ID",
+        appId: "TU_APP_ID"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    const elements = [
+        { name: "Hidrógeno", symbol: "H", config: "1s¹", number: 1, image: "https://via.placeholder.com/100?text=H" },
+        { name: "Helio", symbol: "He", config: "1s²", number: 2, image: "https://via.placeholder.com/100?text=He" },
+        { name: "Litio", symbol: "Li", config: "1s² 2s¹", number: 3, image: "https://via.placeholder.com/100?text=Li" },
+        { name: "Berilio", symbol: "Be", config: "1s² 2s²", number: 4, image: "https://via.placeholder.com/100?text=Be" },
+        { name: "Boro", symbol: "B", config: "1s² 2s² 2p¹", number: 5, image: "https://via.placeholder.com/100?text=B" },
+        { name: "Carbono", symbol: "C", config: "1s² 2s² 2p²", number: 6, image: "https://via.placeholder.com/100?text=C" },
+        { name: "Nitrógeno", symbol: "N", config: "1s² 2s² 2p³", number: 7, image: "https://via.placeholder.com/100?text=N" },
+        { name: "Oxígeno", symbol: "O", config: "1s² 2s² 2p⁴", number: 8, image: "https://via.placeholder.com/100?text=O" },
+        { name: "Flúor", symbol: "F", config: "1s² 2s² 2p⁵", number: 9, image: "https://via.placeholder.com/100?text=F" },
+        { name: "Neón", symbol: "Ne", config: "1s² 2s² 2p⁶", number: 10, image: "https://via.placeholder.com/100?text=Ne" }
+    ];
+
+    let playerHand = [];
+    let opponentHands = {};
+    let currentQuestion = null;
+    let roomId = null;
+    let playerId = null;
+    let playerName = null;
+
+    function createRoom() {
+        playerName = document.getElementById("player-name").value || "Jugador" + Math.floor(Math.random() * 1000);
+        roomId = Math.random().toString(36).substr(2, 9);
+        playerId = "player_" + Date.now();
+        db.ref(`rooms/${roomId}/players/${playerId}`).set({
+            name: playerName,
+            hand: drawHand(),
+            score: 0
+        });
+        document.getElementById("room-id").value = roomId;
+        document.getElementById("message").innerText = `Sala creada: ${roomId}. Comparte el ID con tus amigos.`;
+        listenToRoom();
+    }
+
+    function joinRoom() {
+        playerName = document.getElementById("player-name").value || "Jugador" + Math.floor(Math.random() * 1000);
+        roomId = document.getElementById("room-id").value;
+        if (!roomId) {
+            document.getElementById("message").innerText = "Ingresa un ID de sala.";
+            return;
+        }
+        playerId = "player_" + Date.now();
+        db.ref(`rooms/${roomId}/players/${playerId}`).set({
+            name: playerName,
+            hand: drawHand(),
+            score: 0
+        });
+        document.getElementById("message").innerText = `Unido a la sala: ${roomId}.`;
+        listenToRoom();
+    }
+
+    function drawHand() {
+        const hand = [];
+        for (let i = 0; i < 5; i++) {
+            hand.push(elements[Math.floor(Math.random() * elements.length)]);
+        }
+        return hand;
+    }
+
+    function listenToRoom() {
+        db.ref(`rooms/${roomId}/players`).on("value", snapshot => {
+            const players = snapshot.val();
+            if (!players) {
+                document.getElementById("message").innerText = "La sala no existe o fue cerrada.";
+                return;
+            }
+            playerHand = players[playerId]?.hand || [];
+            opponentHands = Object.keys(players)
+                .filter(id => id !== playerId)
+                .reduce((obj, id) => ({ ...obj, [id]: players[id] }), {});
+            updateHands();
+        });
+        db.ref(`rooms/${roomId}/question`).on("value", snapshot => {
+            currentQuestion = snapshot.val();
+            if (currentQuestion) {
+                document.getElementById("question-area").innerHTML = `<p>${currentQuestion.text}</p>`;
+            }
+        });
+    }
+
+    function updateHands() {
+        const playerHandDiv = document.getElementById("player-hand");
+        const opponentHandDiv = document.getElementById("opponent-hand");
+        playerHandDiv.innerHTML = `<h2 class="text-2xl font-bold text-gray-900 mb-4">Tu mano (${playerName})</h2>`;
+        opponentHandDiv.innerHTML = `<h2 class="text-2xl font-bold text-gray-900 mb-4">Oponentes</h2>`;
+
+        playerHand.forEach((element, index) => {
+            const card = document.createElement("div");
+            card.className = "card rounded-lg p-3 m-2 w-28 h-40 flex flex-col items-center justify-center";
+            card.innerHTML = `
+                <img src="${element.image}" alt="${element.symbol}" class="w-14 h-14 mb-2 rounded-full">
+                <div class="font-bold text-lg">${element.symbol}</div>
+                <div class="text-xs">${element.config}</div>
+            `;
+            card.onclick = () => selectCard(index, "player");
+            playerHandDiv.appendChild(card);
+        });
+
+        Object.values(opponentHands).forEach(opponent => {
+            const opponentDiv = document.createElement("div");
+            opponentDiv.innerHTML = `<h3 class="text-xl font-semibold text-gray-800 mb-2">${opponent.name}</h3>`;
+            opponent.hand.forEach(element => {
+                const card = document.createElement("div");
+                card.className = "card rounded-lg p-3 m-2 w-28 h-40 flex flex-col items-center justify-center";
+                card.innerHTML = `
+                    <img src="${element.image}" alt="${element.symbol}" class="w-14 h-14 mb-2 rounded-full">
+                    <div class="font-bold text-lg">${element.symbol}</div>
+                    <div class="text-xs">${element.config}</div>
+                `;
+                opponentDiv.appendChild(card);
+            });
+            opponentHandDiv.appendChild(opponentDiv);
+        });
+    }
+
+    function selectCard(index, type) {
+        if (type === "player") {
+            const cards = document.getElementById("player-hand").getElementsByClassName("card");
+            for (let i = 0; i < cards.length; i++) {
+                cards[i].classList.remove("selected");
+            }
+            cards[index].classList.add("selected");
+        }
+    }
+
+    function generateQuestion() {
+        const questions = [
+            { text: "¿Cuál es la configuración electrónica del elemento seleccionado?", answer: card => card.config },
+            { text: "¿Cuántos electrones de valencia tiene este elemento?", answer: card => {
+                const config = card.config.split(" ").pop();
+                const match = config.match(/(\d)p(\d)/);
+                return match ? parseInt(match[2]) : (config.includes("s²") ? 2 : 1);
+            }},
+            { text: "¿Es este elemento un gas noble?", answer: card => card.config.endsWith("2p⁶") || card.config === "1s²" }
+        ];
+        currentQuestion = questions[Math.floor(Math.random() * questions.length)];
+        db.ref(`rooms/${roomId}/question`).set(currentQuestion);
+    }
+
+    function playTurn() {
+        if (!roomId || !playerId) {
+            document.getElementById("message").innerText = "Únete o crea una sala primero.";
+            return;
+        }
+        const selectedCard = document.getElementById("player-hand").getElementsByClassName("card selected")[0];
+        if (!selectedCard) {
+            document.getElementById("message").innerText = "Por favor, selecciona una carta.";
+            return;
+        }
+
+        const selectedIndex = Array.from(document.getElementById("player-hand").getElementsByClassName("card")).indexOf(selectedCard);
+        const playerCard = playerHand[selectedIndex];
+
+        db.ref(`rooms/${roomId}/turns/${playerId}`).set({
+            card: playerCard,
+            timestamp: Date.now()
+        });
+
+        db.ref(`rooms/${roomId}/turns`).once("value", snapshot => {
+            const turns = snapshot.val();
+            if (!turns) return;
+
+            const players = Object.keys(turns);
+            if (players.length < Object.keys(opponentHands).length + 1) {
+                document.getElementById("message").innerText = "Esperando a que otros jugadores jueguen...";
+                return;
+            }
+
+            let message = "";
+            let playerAnswer = currentQuestion.answer(playerCard);
+            let maxAnswer = playerAnswer;
+            let winner = playerId;
+
+            Object.keys(turns).forEach(id => {
+                if (id !== playerId) {
+                    const opponentCard = turns[id].card;
+                    const opponentAnswer = currentQuestion.answer(opponentCard);
+                    message += `${opponentHands[id]?.name || "Oponente"}: ${opponentCard.symbol} (${opponentAnswer}). `;
+                    if (typeof opponentAnswer === "boolean") {
+                        if (opponentAnswer && !playerAnswer) {
+                            winner = id;
+                            maxAnswer = opponentAnswer;
+                        }
+                    } else {
+                        if (opponentAnswer > maxAnswer) {
+                            winner = id;
+                            maxAnswer = opponentAnswer;
+                        }
+                    }
+                }
+            });
+
+            message = `Tu carta: ${playerCard.symbol} (${playerAnswer}). ${message}`;
+            if (winner === playerId) {
+                message += "¡Ganaste esta ronda!";
+                db.ref(`rooms/${roomId}/players/${playerId}/score`).transaction(score => (score || 0) + 1);
+                Object.keys(opponentHands).forEach(id => {
+                    const hand = opponentHands[id].hand;
+                    if (hand.length > 0) {
+                        hand.splice(Math.floor(Math.random() * hand.length), 1);
+                        db.ref(`rooms/${roomId}/players/${id}/hand`).set(hand);
+                    }
+                });
+            } else {
+                message += `${opponentHands[winner]?.name || "Oponente"} gana esta ronda.`;
+                playerHand.splice(selectedIndex, 1);
+                db.ref(`rooms/${roomId}/players/${playerId}/hand`).set(playerHand);
+            }
+
+            document.getElementById("message").innerText = message;
+            db.ref(`rooms/${roomId}/turns`).remove();
+            generateQuestion();
+
+            const totalHands = Object.values(opponentHands).reduce((sum, opp) => sum + opp.hand.length, playerHand.length);
+            if (totalHands === 0) {
+                document.getElementById("message").innerText = "¡Juego terminado! Revisa los puntajes.";
+            }
+        });
+    }
+</script>
+</body>
+</html>
